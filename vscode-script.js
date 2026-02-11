@@ -1,37 +1,21 @@
-document.addEventListener("DOMContentLoaded", function () {
+(() => {
   const ROOT_SEL = ".monaco-workbench";
   const PALETTE_SEL = ".quick-input-widget";
   const OVERLAY_ID = "command-blur";
 
-  let resizeHandler = null;
+  let running = false;
+  let raf = null;
 
-  const waitForPalette = setInterval(() => {
-    const palette = document.querySelector(PALETTE_SEL);
-    if (!palette) return;
+  function isPaletteVisible(palette) {
+    if (!palette) return false;
 
-    // Watch palette show/hide
-    if (palette.style.display !== "none") showBlur();
+    const cs = getComputedStyle(palette);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
 
-    const observer = new MutationObserver(() => {
-      if (palette.style.display === "none") {
-        hideBlur();
-      } else {
-        showBlur();
-      }
-    });
-
-    observer.observe(palette, { attributes: true, attributeFilter: ["style"] });
-    clearInterval(waitForPalette);
-  }, 300);
-
-  // Escape closes blur
-  document.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.key === "Escape" || event.key === "Esc") hideBlur();
-    },
-    true
-  );
+    // If it has no box, it's not really visible
+    const rect = palette.getBoundingClientRect();
+    return rect.width > 10 && rect.height > 10;
+  }
 
   function ensureOverlay(root) {
     let overlay = document.getElementById(OVERLAY_ID);
@@ -40,7 +24,6 @@ document.addEventListener("DOMContentLoaded", function () {
     overlay = document.createElement("div");
     overlay.id = OVERLAY_ID;
 
-    // 4 panels: top/left/right/bottom
     ["top", "left", "right", "bottom"].forEach((pos) => {
       const p = document.createElement("div");
       p.className = `command-blur-panel ${pos}`;
@@ -51,11 +34,13 @@ document.addEventListener("DOMContentLoaded", function () {
     return overlay;
   }
 
-  function layoutOverlay() {
-    const root = document.querySelector(ROOT_SEL);
-    const palette = document.querySelector(PALETTE_SEL);
+  function removeOverlay() {
     const overlay = document.getElementById(OVERLAY_ID);
-    if (!root || !palette || !overlay) return;
+    if (overlay) overlay.remove();
+  }
+
+  function layoutOverlay(root, palette) {
+    const overlay = ensureOverlay(root);
 
     const rRoot = root.getBoundingClientRect();
     const rPal = palette.getBoundingClientRect();
@@ -98,28 +83,47 @@ document.addEventListener("DOMContentLoaded", function () {
     bottomP.style.height = `${bottom}px`;
   }
 
-  function showBlur() {
+  function tick() {
     const root = document.querySelector(ROOT_SEL);
-    if (!root) return;
+    const palette = document.querySelector(PALETTE_SEL);
 
-    // Ensure root can position absolute children correctly
-    const prevPos = getComputedStyle(root).position;
-    if (prevPos === "static") root.style.position = "relative";
-
-    ensureOverlay(root);
-    layoutOverlay();
-
-    // keep it aligned if window resizes
-    if (!resizeHandler) {
-      resizeHandler = () => {
-        if (document.getElementById(OVERLAY_ID)) layoutOverlay();
-      };
-      window.addEventListener("resize", resizeHandler);
+    if (!root || !palette) {
+      removeOverlay();
+      raf = requestAnimationFrame(tick);
+      return;
     }
+
+    // root needs relative positioning
+    if (getComputedStyle(root).position === "static") root.style.position = "relative";
+
+    if (isPaletteVisible(palette)) {
+      layoutOverlay(root, palette);
+    } else {
+      removeOverlay();
+    }
+
+    raf = requestAnimationFrame(tick);
   }
 
-  function hideBlur() {
-    const overlay = document.getElementById(OVERLAY_ID);
-    if (overlay) overlay.remove();
+  function start() {
+    if (running) return;
+    running = true;
+    raf = requestAnimationFrame(tick);
+
+    // Escape removes blur immediately
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key === "Escape" || e.key === "Esc") removeOverlay();
+      },
+      true
+    );
   }
-});
+
+  // Run even if injected after DOMContentLoaded
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
+})();
